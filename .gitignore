@@ -1,0 +1,9 @@
+# Visual Studio IDE files
+.vs/
+
+# Visual Studio Code settings
+.vscode/
+
+# Operating System files
+.DS_Store
+Thumbs.db
