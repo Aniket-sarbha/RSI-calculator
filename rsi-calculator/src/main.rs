@@ -50,21 +50,27 @@ struct HistoricalData {
 
 #[derive(Debug)]
 struct RsiCalculator {
-    prices: Vec<f64>,
     period: usize,
+    prices: Vec<f64>,
+    avg_gain: Option<f64>,
+    avg_loss: Option<f64>,
     total_trades: usize,
     history: Vec<HistoricalDataPoint>,
     max_history: usize,
+    last_rsi: Option<f64>,
 }
 
 impl RsiCalculator {
     fn new(period: usize) -> Self {
         Self {
-            prices: Vec::new(),
             period,
+            prices: Vec::new(),
+            avg_gain: None,
+            avg_loss: None,
             total_trades: 0,
             history: Vec::new(),
             max_history: 200, // Keep last 200 data points
+            last_rsi: None,
         }
     }
 
@@ -79,49 +85,19 @@ impl RsiCalculator {
         
         let timestamp = Utc::now().to_rfc3339();
         
-        // Calculate RSI if we have enough data
-        let rsi_value = if self.prices.len() < self.period + 1 {
+        let rsi_value = if self.prices.len() < 2 {
+            // Need at least 2 prices to calculate price change
             None
+        } else if self.prices.len() <= self.period + 1 {
+            // Initial calculation using simple moving average for the first period
+            self.calculate_initial_rsi()
         } else {
-            // Keep only the last (period * 2) prices for efficiency
-            if self.prices.len() > self.period * 2 {
-                self.prices.drain(0..self.prices.len() - self.period - 1);
-            }
-
-            // Calculate RSI using the standard formula
-            let mut gains = Vec::new();
-            let mut losses = Vec::new();
-
-            // Calculate price changes
-            for i in 1..self.prices.len() {
-                let change = self.prices[i] - self.prices[i - 1];
-                if change > 0.0 {
-                    gains.push(change);
-                    losses.push(0.0);
-                } else {
-                    gains.push(0.0);
-                    losses.push(-change);
-                }
-            }
-
-            // Take only the last 'period' changes
-            let recent_gains: Vec<f64> = gains.iter().rev().take(self.period).cloned().collect();
-            let recent_losses: Vec<f64> = losses.iter().rev().take(self.period).cloned().collect();
-
-            // Calculate average gains and losses
-            let avg_gain: f64 = recent_gains.iter().sum::<f64>() / self.period as f64;
-            let avg_loss: f64 = recent_losses.iter().sum::<f64>() / self.period as f64;
-
-            // Handle edge case where avg_loss is 0
-            if avg_loss == 0.0 {
-                Some(100.0)
-            } else {
-                // Calculate RSI
-                let rs = avg_gain / avg_loss;
-                let rsi = 100.0 - (100.0 / (1.0 + rs));
-                Some(rsi)
-            }
+            // Use Wilder's smoothing for subsequent calculations
+            self.calculate_smoothed_rsi()
         };
+
+        // Store the calculated RSI
+        self.last_rsi = rsi_value;
 
         // Add to history
         self.history.push(HistoricalDataPoint {
@@ -135,11 +111,93 @@ impl RsiCalculator {
             self.history.drain(0..self.history.len() - self.max_history);
         }
 
+        // Keep reasonable price history for calculations (period + buffer)
+        if self.prices.len() > self.period + 100 {
+            let excess = self.prices.len() - (self.period + 50);
+            self.prices.drain(0..excess);
+        }
+
         rsi_value
+    }
+
+    fn calculate_initial_rsi(&mut self) -> Option<f64> {
+        // We need at least period+1 prices to calculate initial RSI
+        if self.prices.len() <= self.period {
+            return None;
+        }
+
+        let mut gains = Vec::new();
+        let mut losses = Vec::new();
+
+        // Calculate price changes for the period
+        let start_index = self.prices.len() - self.period - 1;
+        for i in (start_index + 1)..self.prices.len() {
+            let change = self.prices[i] - self.prices[i - 1];
+            if change > 0.0 {
+                gains.push(change);
+                losses.push(0.0);
+            } else {
+                gains.push(0.0);
+                losses.push(-change);
+            }
+        }
+
+        if gains.is_empty() {
+            return None;
+        }
+
+        // Initial averages (simple moving average for first calculation)
+        self.avg_gain = Some(gains.iter().sum::<f64>() / self.period as f64);
+        self.avg_loss = Some(losses.iter().sum::<f64>() / self.period as f64);
+
+        self.calculate_rsi_from_averages()
+    }
+
+    fn calculate_smoothed_rsi(&mut self) -> Option<f64> {
+        if self.prices.len() < 2 || self.avg_gain.is_none() || self.avg_loss.is_none() {
+            return None;
+        }
+
+        let current_price = *self.prices.last().unwrap();
+        let previous_price = self.prices[self.prices.len() - 2];
+        let price_change = current_price - previous_price;
+
+        let current_gain = if price_change > 0.0 { price_change } else { 0.0 };
+        let current_loss = if price_change < 0.0 { -price_change } else { 0.0 };
+
+        // Wilder's smoothing method: EMA with alpha = 1/period
+        let alpha = 1.0 / self.period as f64;
+        
+        self.avg_gain = Some(
+            (1.0 - alpha) * self.avg_gain.unwrap() + alpha * current_gain
+        );
+        self.avg_loss = Some(
+            (1.0 - alpha) * self.avg_loss.unwrap() + alpha * current_loss
+        );
+
+        self.calculate_rsi_from_averages()
+    }
+
+    fn calculate_rsi_from_averages(&self) -> Option<f64> {
+        let avg_gain = self.avg_gain?;
+        let avg_loss = self.avg_loss?;
+
+        if avg_loss == 0.0 {
+            Some(100.0)
+        } else if avg_gain == 0.0 {
+            Some(0.0)
+        } else {
+            let rs = avg_gain / avg_loss;
+            Some(100.0 - (100.0 / (1.0 + rs)))
+        }
     }
 
     fn get_latest_price(&self) -> Option<f64> {
         self.prices.last().copied()
+    }
+
+    fn get_latest_rsi(&self) -> Option<f64> {
+        self.last_rsi
     }
 
     fn get_total_trades(&self) -> usize {
@@ -191,7 +249,7 @@ async fn get_token_summary(token: String, state: SharedState) -> Result<impl war
             Some(TokenSummary {
                 token_address: token.clone(),
                 latest_price: calculator.get_latest_price().unwrap_or(0.0),
-                latest_rsi: rsi_message.as_ref().map(|msg| msg.rsi_value),
+                latest_rsi: calculator.get_latest_rsi(),
                 total_trades: calculator.get_total_trades(),
                 last_updated: rsi_message.as_ref()
                     .map(|msg| msg.timestamp.clone())
@@ -215,7 +273,7 @@ async fn get_all_summaries(state: SharedState) -> Result<impl warp::Reply, warp:
             TokenSummary {
                 token_address: token.clone(),
                 latest_price: calculator.get_latest_price().unwrap_or(0.0),
-                latest_rsi: rsi_message.as_ref().map(|msg| msg.rsi_value),
+                latest_rsi: calculator.get_latest_rsi(),
                 total_trades: calculator.get_total_trades(),
                 last_updated: rsi_message.as_ref()
                     .map(|msg| msg.timestamp.clone())
@@ -293,12 +351,14 @@ async fn kafka_processor(
                     if let Ok(trade_str) = std::str::from_utf8(payload) {
                         match serde_json::from_str::<TradeMessage>(trade_str) {
                             Ok(trade) => {
-                                let rsi_message_opt = {
+                                let (rsi_message_opt, trade_count) = {
                                     let mut data = shared_state.write().unwrap();
                                     let (calculator, _) = data
                                         .entry(trade.token_address.clone())
                                         .or_insert_with(|| (RsiCalculator::new(14), None));
 
+                                    let trade_count = calculator.get_total_trades();
+                                    
                                     if let Some(rsi_value) = calculator.add_price(trade.price_in_sol) {
                                         let rsi_message = RsiMessage {
                                             token_address: trade.token_address.clone(),
@@ -311,9 +371,9 @@ async fn kafka_processor(
                                         // Update shared state
                                         data.get_mut(&trade.token_address).unwrap().1 = Some(rsi_message.clone());
                                         
-                                        Some(rsi_message)
+                                        (Some(rsi_message), trade_count + 1)
                                     } else {
-                                        None
+                                        (None, trade_count + 1)
                                     }
                                 };
 
@@ -338,11 +398,28 @@ async fn kafka_processor(
                                     };
                                     
                                     println!(
-                                        "📊 RSI: {} = {:.2} (Price: {:.8} SOL)",
+                                        "📊 RSI: {} = {:.2} (Price: {:.8} SOL) [Trades: {}]",
                                         token_short,
                                         rsi_message.rsi_value,
-                                        trade.price_in_sol
+                                        trade.price_in_sol,
+                                        trade_count
                                     );
+                                } else {
+                                    // Still early in the data collection phase
+                                    if message_count % 50 == 0 {
+                                        let token_short = if trade.token_address.len() > 8 {
+                                            format!("{}...", &trade.token_address[..8])
+                                        } else {
+                                            trade.token_address.clone()
+                                        };
+                                        println!(
+                                            "📈 Building data: {} (Price: {:.8} SOL) [Trades: {}/{}]",
+                                            token_short,
+                                            trade.price_in_sol,
+                                            trade_count,
+                                            14 + 1 // period + 1 needed for RSI
+                                        );
+                                    }
                                 }
                             }
                             Err(e) => {
@@ -371,6 +448,7 @@ async fn kafka_processor(
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting RSI Calculator Service with Web API");
+    println!("📊 Using proper Wilder's RSI calculation method");
     
     // Shared state for token data
     let shared_state: SharedState = Arc::new(RwLock::new(HashMap::new()));
@@ -454,6 +532,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   GET /api/summaries - Get all token summaries");
     println!("   GET /api/token/<address> - Get specific token summary");
     println!("   GET /api/history/<address> - Get historical price/RSI data");
+    println!("⚠️  Note: RSI values will appear after {} trades per token", 14 + 1);
 
     // Start web server
     let server_task = tokio::spawn(async move {
