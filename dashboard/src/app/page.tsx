@@ -7,6 +7,7 @@ import { PriceChart } from '@/components/PriceChart';
 import { RSIChart } from '@/components/RSIChart';
 import { dataService } from '@/services/dataService';
 import { TokenData, RsiMessage, ChartDataPoint } from '@/types';
+import { RefreshCcw } from 'lucide-react';
 
 export default function Dashboard() {
   const [tokens, setTokens] = useState<string[]>([]);
@@ -177,13 +178,13 @@ export default function Dashboard() {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight">Crypto Trading Analytics</h1>
-            <p className="text-sm text-[--color-muted-foreground] mt-1">Real-time RSI analysis for pump.fun tokens</p>
           </div>
           <div className="flex items-center gap-3">
             <button
               onClick={refreshData}
               className="btn btn-primary"
             >
+            <RefreshCcw className='h-4 w-4'/>
               Refresh Data
             </button>
           </div>

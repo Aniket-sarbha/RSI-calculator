@@ -20,7 +20,7 @@ export function ThemeToggle() {
     <button
       aria-label="Toggle theme"
       onClick={() => setTheme(isDark ? "light" : "dark")}
-      className="btn btn-ghost w-12 h-12 justify-center"
+      className="btn btn-ghost w-13 h-13 justify-center"
     >
       {isDark ? <Sun className="h-6 w-6" /> : <Moon className="h-6 w-6" />}
     </button>
